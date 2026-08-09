@@ -1,0 +1,16 @@
+{
+ "doctype": "Page",
+ "module": "Warehouse Theatre 3D Module",
+ "name": "material-requisition-3d",
+ "page_name": "material-requisition-3d",
+ "roles": [
+  {"role": "System Manager"},
+  {"role": "Stock Manager"},
+  {"role": "Stock User"},
+  {"role": "Purchase Manager"},
+  {"role": "Purchase User"}
+ ],
+ "standard": "Yes",
+ "system_page": 0,
+ "title": "Material Requisition 3D"
+}
