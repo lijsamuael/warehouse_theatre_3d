@@ -60,6 +60,7 @@ def get_warehouse_groups(company=None):
 		SELECT
 			c.name AS id,
 			c.name AS name,
+			COALESCE(c.default_currency, '') AS default_currency,
 			NULL   AS parent_id,
 			''     AS parent_name,
 			(SELECT COUNT(*)

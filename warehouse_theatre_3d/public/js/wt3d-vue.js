@@ -14,6 +14,9 @@ const FCH = p => p>=90?'#f87171':p>=70?'#fb923c':p>=40?'#facc15':'#4ade80';
 const UCH = ['#60a5fa','#4ade80','#fbbf24','#f87171','#a78bfa','#34d399'];
 const fmt  = n => (parseFloat(n)||0).toLocaleString('en-IN',{maximumFractionDigits:1});
 const fmtK = n => { n=parseFloat(n)||0; return n>=1000?(n/1000).toFixed(1)+'K':fmt(n); };
+const curCode = () => store.curGrp?.default_currency || 'ETB';
+const curSym  = () => { try { const s=(0).toLocaleString('en',{style:'currency',currency:curCode()}); return s.replace(/[\d.,\s]/g,'') || curCode(); } catch(e){ return curCode(); } };
+const money   = n => (parseFloat(n)||0).toLocaleString('en',{style:'currency',currency:curCode(),maximumFractionDigits:0});
 
 function lvFill(lv) {
   const wc = (lv.uoms||[]).filter(u=>u.cap>0);
@@ -1835,7 +1838,7 @@ const DetailPanel = defineComponent({
 const ItemModal = defineComponent({
   name: 'ItemModal',
   setup(){
-    return { store, fmt, fmtK, actions, lvFill };
+    return { store, fmt, fmtK, actions, lvFill, money, curCode, curSym };
   },
   computed:{
     d(){ return this.store.imData; },
@@ -1873,7 +1876,7 @@ const ItemModal = defineComponent({
             </div>
             <div class="wt-im-stat">
               <div class="wt-im-stat-lbl">STOCK VALUE</div>
-              <div class="wt-im-stat-val green">₹{{Math.round(totalVal).toLocaleString('en-IN')}}</div>
+              <div class="wt-im-stat-val green">{{money(totalVal)}}</div>
             </div>
           </div>
           <div class="wt-im-tbl-wrap">
@@ -1882,7 +1885,7 @@ const ItemModal = defineComponent({
                 <th style="color:#718096;width:28px">#</th>
                 <th>Item Code</th><th>Item Name</th><th>Group</th><th>UOM</th>
                 <th>Actual</th><th>Reserved</th><th>Available</th>
-                <th>Rate ₹</th><th>Value ₹</th>
+                <th>Rate {{curSym()}}</th><th>Value {{curSym()}}</th>
               </tr></thead>
               <tbody>
                 <tr v-if="!items.length">
@@ -1898,7 +1901,7 @@ const ItemModal = defineComponent({
                   <td :class="(it.r>0)?'wt-im-res':'wt-im-dim'">{{it.r>0?fmt(it.r):'—'}}</td>
                   <td :class="((parseFloat(it.a)||0)-(parseFloat(it.r)||0)>0)?'wt-im-avl':'wt-im-dim'">{{fmt((parseFloat(it.a)||0)-(parseFloat(it.r)||0))}}</td>
                   <td style="color:#718096">{{(parseFloat(it.rate)||0)>0?fmt(it.rate):'—'}}</td>
-                  <td class="wt-im-val">{{(parseFloat(it.stock_value)||0)>0?Math.round(parseFloat(it.stock_value)).toLocaleString('en-IN'):'—'}}</td>
+                  <td class="wt-im-val">{{(parseFloat(it.stock_value)||0)>0?money(it.stock_value):'—'}}</td>
                 </tr>
               </tbody>
             </table>
