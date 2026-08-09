@@ -17,6 +17,8 @@ const fmtK = n => { n=parseFloat(n)||0; return n>=1000?(n/1000).toFixed(1)+'K':f
 const curCode = () => store.curGrp?.default_currency || 'ETB';
 const curSym  = () => { try { const s=(0).toLocaleString('en',{style:'currency',currency:curCode()}); return s.replace(/[\d.,\s]/g,'') || curCode(); } catch(e){ return curCode(); } };
 const money   = n => (parseFloat(n)||0).toLocaleString('en',{style:'currency',currency:curCode(),maximumFractionDigits:0});
+const RACK_COLS=[0x60a5fa,0x4ade80,0xfbbf24,0xf87171,0xa78bfa,0x34d399,0x38bdf8,0xf472b6,0xf97316,0x22d3ee];
+const shade=(hex,f)=>{ const r=(hex>>16)&255,g=(hex>>8)&255,b=hex&255; return (Math.round(r*f)<<16)|(Math.round(g*f)<<8)|Math.round(b*f); };
 
 function lvFill(lv) {
   const wc = (lv.uoms||[]).filter(u=>u.cap>0);
@@ -623,7 +625,7 @@ class ThreeEngine {
   constructor() {
     this.meshMap = {};
     this.theta=.65; this.phi=.78; this.radius=28; this.panX=0; this.panZ=0;
-    this.tT=.65; this.tP=.78; this.tR=28; this.tPX=0; this.tPZ=0;
+    this.tT=.65; this.tP=.78; this.tR=36; this.tPX=0; this.tPZ=0;
     this.drag=false; this.rDrag=false; this.lx=0; this.ly=0;
     this.hovKey=null;
     this._animRunning=false;
@@ -730,7 +732,7 @@ class ThreeEngine {
     this.aisleMode = false;
     store.aisleMode = false;
     // Restore orbit view
-    this.tT=.65; this.tP=.78; this.tR=28; this.tPX=0; this.tPZ=0;
+    this.tT=.65; this.tP=.78; this.tR=36; this.tPX=0; this.tPZ=0;
   }
 
   moveAisle(forward, strafe, turnY, turnX) {
@@ -746,7 +748,7 @@ class ThreeEngine {
     while (this.rootGrp.children.length) this.rootGrp.remove(this.rootGrp.children[0]);
     this.meshMap={};
     store.selKey=null;
-    const SW=2.2, SD=2.2, GAP=.6, LVH=1.0, BASE=.1;
+    const SW=2.2, SD=2.2, GAP=3.0, LVH=1.0, BASE=.1;
     const cols=Math.max(...slots.map(s=>s.col),0)+1;
     const maxRow=Math.max(...slots.map(s=>s.row),0);
     const rowZOffset={};
@@ -760,14 +762,15 @@ class ThreeEngine {
     const totalDepth=cumZ-GAP;
     const ox=-(cols*(SW+GAP)-GAP)/2;
     const oz=-totalDepth/2;
-    const baseMat =new THREE.MeshStandardMaterial({color:store.isDark?0x1a2235:0xdde3ef,roughness:.8,metalness:.25});
-    const pilMat  =new THREE.MeshStandardMaterial({color:store.isDark?0x2d3a52:0xc5cdd8,roughness:.7,metalness:.4});
-    const shelfMat=new THREE.MeshStandardMaterial({color:store.isDark?0x22304a:0xcfd6e0,roughness:.9});
     const bgCol=store.isDark?0x0c0e14:0xf0f2f5;
     this.scene.background.setHex(bgCol);
     this.scene.fog.color.setHex(bgCol);
     this.renderer.setClearColor(bgCol,1);
-    slots.forEach(sl=>{
+    slots.forEach((sl,si)=>{
+      const sCol=RACK_COLS[si%RACK_COLS.length];
+      const baseMat =new THREE.MeshStandardMaterial({color:shade(sCol,store.isDark?.3:.9),roughness:.8,metalness:.25});
+      const pilMat  =new THREE.MeshStandardMaterial({color:shade(sCol,store.isDark?.45:.95),roughness:.7,metalness:.4});
+      const shelfMat=new THREE.MeshStandardMaterial({color:shade(sCol,store.isDark?.38:.93),roughness:.9});
       const nL=sl.levels.length;
       const lvH=Math.max(.35,Math.min(1.0,9/Math.max(1,nL)));
       const cx=ox+sl.col*(SW+GAP)+SW/2;
@@ -782,7 +785,7 @@ class ThreeEngine {
       });
       sl.levels.forEach((lv,li)=>{
         const lp=lvFill(lv), hs=(lv.uoms||[]).some(u=>u.qty>0);
-        const col=hs?FC(lp):(store.isDark?0x101827:0xe8edf5);
+        const col=hs?shade(sCol,1-.4*(lp/100)):(store.isDark?0x101827:0xe8edf5);
         const y0=BASE+li*lvH;
         const shelf=new THREE.Mesh(new THREE.BoxGeometry(SW,.024,SD),shelfMat);
         shelf.position.set(cx,y0+.012,cz); this.rootGrp.add(shelf);
@@ -808,7 +811,7 @@ class ThreeEngine {
         proxy.position.set(cx,y0+lvH/2,cz);
         proxy.userData={slot:sl,lv,key:lvKey(sl,lv)};
         this.rootGrp.add(proxy);
-        this.meshMap[lvKey(sl,lv)]={fillM,shellM:shell,proxy,lv,slot:sl,li,col};
+        this.meshMap[lvKey(sl,lv)]={fillM,shellM:shell,proxy,lv,slot:sl,li,col,sCol};
       });
     });
   }
@@ -819,7 +822,7 @@ class ThreeEngine {
     Object.entries(this.meshMap).forEach(([k,d])=>{
       const isSel=k===key, same=selLv&&d.lv.label===selLv.label;
       const lp=lvFill(d.lv), hs=(d.lv.uoms||[]).some(u=>u.qty>0);
-      const col=hs?FC(lp):(store.isDark?0x101827:0xe8edf5);
+      const col=d.sCol?shade(d.sCol,1-.4*(lp/100)):(hs?FC(lp):(store.isDark?0x101827:0xe8edf5));
       if (d.fillM){
         d.fillM.material.color.setHex(isSel?0xffffff:same?0xd0d8ff:col);
         d.fillM.material.emissive.setHex(isSel?0x3b82f6:same?0x1e3a8a:col);
@@ -1001,7 +1004,7 @@ const actions = {
 
   async enterAisleView(gapIndex=null) {
     if (!store.slots.length) return;
-    const SW=2.2, SD=2.2, GAP=.6;
+    const SW=2.2, SD=2.2, GAP=3.0;
 
     // Row Z positions must stay in sync with buildScene(): dense row indices
     // 0..maxRow, using each row's row_gap where a real slot exists there.

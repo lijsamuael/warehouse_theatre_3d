@@ -1,11 +1,11 @@
 /* Warehouse Theatre 3D Service Worker */
-const CACHE_NAME = "warehouse-theatre-3d-v4";
+const CACHE_NAME = "warehouse-theatre-3d-v5";
 
 const SHELL = [
   "/warehouse-theatre-3d",
   "/assets/warehouse_theatre_3d/js/three.min.js",
   "/assets/warehouse_theatre_3d/js/vue.global.prod.js",
-  "/assets/warehouse_theatre_3d/js/wt3d-vue.js?v=8",
+  "/assets/warehouse_theatre_3d/js/wt3d-vue.js?v=9",
 ];
 
 self.addEventListener("install", e => {
