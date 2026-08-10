@@ -78,12 +78,15 @@ function stepIndex(mr) {
 function docsOf(mr) {
 	const po = mr.purchase_orders || [], grv = mr.purchase_receipts || [];
 	const fmtList = arr => arr.length ? (arr.length === 1 ? arr[0] : `${arr[0]} +${arr.length - 1} more`) : null;
-	return [
+	const docs = [
 		{ kind: 'Material Requisition', name: mr.material_requisition || null, display: mr.material_requisition || null, route: 'Material Request' },
 		{ kind: 'Purchase Request', name: mr.material_request || null, display: mr.material_request || null, route: 'Material Request' },
 		{ kind: 'Purchase Order', name: po.length ? po[0] : null, display: fmtList(po), route: 'Purchase Order' },
 		{ kind: 'Purchase Receipt', name: grv.length ? grv[0] : null, display: fmtList(grv), route: 'Purchase Receipt' },
 	];
+	if ((mr.fixed_asset_requests || []).length) docs.push({ kind: 'Fixed Asset Request', name: mr.fixed_asset_requests[0], display: fmtList(mr.fixed_asset_requests), route: 'Fixed Asset Request' });
+	if ((mr.fuel_requests || []).length) docs.push({ kind: 'Fuel Request', name: mr.fuel_requests[0], display: fmtList(mr.fuel_requests), route: 'Fuel Request' });
+	return docs;
 }
 function friendlyRange(from, to) {
 	if (!from || !to) return '';
@@ -726,17 +729,33 @@ class Engine {
 
 			/* card is tinted with its current stage colour so status reads at a glance */
 			const stageCol = hexOf(inProg >= 0 ? inProg : 4);
-			const edge = new THREE.Mesh(new THREE.BoxGeometry(2.32, .62, .74),
+			/* a podium base underneath makes the card read as a solid 3D object */
+			const base = new THREE.Mesh(
+				new THREE.BoxGeometry(2.44, .3, .84),
+				this.mat(dark ? 0x141722 : 0xb6c3d4, 0x000000, 0)
+			);
+			base.position.set(0, cardY - .4, 0);
+			base.castShadow = true;
+			base.receiveShadow = true;
+			g.add(base);
+			const edge = new THREE.Mesh(new THREE.BoxGeometry(2.34, .62, .78),
 				this.mat(dark ? blend(0x2b3350, stageCol, .32) : blend(0x9fb0c6, stageCol, .18), 0x000000, 0));
 			edge.position.set(0, cardY, 0);
 			edge.castShadow = true;
 			g.add(edge);
-			const cardMat = this.mat(dark ? blend(0x1a1e2a, stageCol, .42) : blend(0xffffff, stageCol, .24), 0x000000, 0);
-			const card = new THREE.Mesh(new THREE.BoxGeometry(2.2, .5, .62), cardMat);
+			const cardMat = this.mat(dark ? blend(0x1a1e2a, stageCol, .42) : blend(0xffffff, stageCol, .24), stageCol, .12);
+			const card = new THREE.Mesh(new THREE.BoxGeometry(2.2, .5, .74), cardMat);
 			card.position.set(0, cardY, 0);
 			card.castShadow = true;
 			card.userData = { key: m.material_request, entry: m, x, z, grp: g };
 			g.add(card);
+			/* a lit top edge catches the light and sells the 3D depth */
+			const topStrip = new THREE.Mesh(
+				new THREE.BoxGeometry(2.12, .06, .7),
+				this.mat(stageCol, stageCol, .5)
+			);
+			topStrip.position.set(0, cardY + .27, 0);
+			g.add(topStrip);
 			this.cardMeshes.push(card);
 			this.hitMeshes.push(card);
 			this.meshMap[m.material_request] = { entry: m, rx: x, rz: z, grp: g, y: cardY };
@@ -744,10 +763,13 @@ class Engine {
 
 			/* happy face + nametag on the front */
 			const face = this.makeFace(m);
-			face.position.set(0, cardY, .39);
+			face.position.set(0, cardY, .42);
 			g.add(face);
 
 			/* MR number floating in front of the card, on its left side (clear of the timeline bar) */
+			const originNos = [];
+			(m.fixed_asset_requests || []).forEach(n => { if (n && n !== m.material_requisition) originNos.push(n); });
+			(m.fuel_requests || []).forEach(n => { if (n && n !== m.material_requisition) originNos.push(n); });
 			const mrTxt = (m.material_requisition || m.material_request || '').trim();
 			if (mrTxt) {
 				const mrLbl = this.makeLabel(mrTxt.length > 14 ? mrTxt.slice(0, 13) + '…' : mrTxt, {
@@ -756,25 +778,41 @@ class Engine {
 					border: dark ? 'rgba(96,165,250,.45)' : 'rgba(37,99,235,.4)',
 					color: dark ? '#fff' : '#1f2937',
 				});
-				mrLbl.position.set(-1.7, cardY + .35, .5);
+				mrLbl.position.set(-2.05, cardY + .35, .5);
 				mrLbl.renderOrder = 7;
 				g.add(mrLbl);
+				/* if this request originated from a Fixed Asset / Fuel Request, show that no too */
+				if (originNos.length) {
+					const origLbl = this.makeLabel(originNos.join(' · ').slice(0, 24), {
+						size: .22, pill: true,
+						bg: dark ? 'rgba(34,18,44,.92)' : 'rgba(255,255,255,.96)',
+						border: dark ? 'rgba(216,140,240,.5)' : 'rgba(147,51,234,.4)',
+						color: dark ? '#e9d5ff' : '#7e22ce',
+					});
+					origLbl.position.set(-2.05, cardY - .1, .5);
+					origLbl.renderOrder = 7;
+					g.add(origLbl);
+				}
 			}
 
-			/* stage candy coins */
+			/* stage candy coins — chunky cylinders facing the camera so they look 3D */
 			const COIN = .44, SPACE = .5;
+			const coinGeo = new THREE.CylinderGeometry(.21, .21, .16, 24);
+			coinGeo.rotateX(Math.PI / 2);
+			const coinGeoEmpty = new THREE.CylinderGeometry(.21, .21, .12, 24);
+			coinGeoEmpty.rotateX(Math.PI / 2);
 			for (let s = 0; s < 5; s++) {
 				const done = stages[s];
 				const cx = (s - 2) * SPACE;
 				const cy = cardY + .45;
 				let mesh;
 				if (done) {
-					mesh = new THREE.Mesh(new THREE.BoxGeometry(COIN, COIN, .08), this.mat(hexOf(s), hexOf(s), .5));
+					mesh = new THREE.Mesh(coinGeo, this.mat(hexOf(s), hexOf(s), .5));
 				} else if (s === inProg) {
-					mesh = new THREE.Mesh(new THREE.BoxGeometry(COIN, COIN, .08), this.mat(hexOf(s), hexOf(s), .55));
+					mesh = new THREE.Mesh(coinGeo, this.mat(hexOf(s), hexOf(s), .55));
 					this.pulse.push({ mesh });
 				} else {
-					mesh = new THREE.Mesh(new THREE.BoxGeometry(COIN, COIN, .06), emptyBlockMat);
+					mesh = new THREE.Mesh(coinGeoEmpty, emptyBlockMat);
 				}
 				mesh.position.set(cx, cy, 0);
 				mesh.castShadow = true;
@@ -788,7 +826,8 @@ class Engine {
 			}
 
 			/* mini timeline bar (group-relative) — one coloured span per journey stage.
-			   Each reached stage gets its own colour, spanning the days elapsed for that step. */
+			   Each reached stage keeps its own colour over the days elapsed for that step,
+			   so the pipe after the card is a proper multi-coloured trail with day counts. */
 			const stageD = [
 				m.mr_date || m.date,
 				m.date,
@@ -798,38 +837,44 @@ class Engine {
 			];
 			const stageDone = [true, true, !!m.has_po, !!m.has_grv, !!m.fully_received];
 			const stageX = stageD.map(d => (d ? xc(dayNum(d)) : null));
-			const firstX = stageX[0];
 			const todayX = (todayN >= fromN && todayN <= toN) ? xc(todayN) : null;
-			let endX = firstX;
-			stageX.forEach(v => { if (v != null && v > endX) endX = v; });
-			if (todayX != null && todayX > endX) endX = todayX;
-			endX = Math.max(endX, firstX + .18);
 			const inProgIdx = stageDone.indexOf(false);
 			const segs = [];
-			let prevX = firstX, prevDate = stageD[0];
-			for (let s = 0; s < 5; s++) {
+			let prevX = stageX[0], prevDate = stageD[0];
+			/* completed legs: each reached stage's span carries that stage's colour
+			   (MR leg is blue, PR leg purple, PO leg orange, GRV leg teal, done leg green) */
+			for (let s = 1; s < 5; s++) {
 				if (!stageDone[s] || stageX[s] == null) continue;
 				const to = Math.max(stageX[s], prevX + .18);
-				segs.push({ a: prevX, b: to, color: hexOf(s), days: s > 0 ? daysBetween(prevDate, stageD[s]) : 0 });
+				segs.push({ a: prevX, b: to, color: hexOf(s - 1), days: daysBetween(prevDate, stageD[s]) });
 				prevX = Math.max(prevX, to); prevDate = stageD[s];
 			}
 			if (inProgIdx === -1) {
 				/* all five steps done: green DONE span running to today */
-				if (endX > prevX) segs.push({ a: prevX, b: endX, color: hexOf(4), days: null });
+				const end = todayX != null ? Math.max(todayX, prevX + .18) : prevX + .18;
+				if (end > prevX + .1) segs.push({
+					a: prevX, b: end, color: hexOf(4),
+					days: todayX != null ? daysBetween(stageD[3] || stageD[0], todayN) : null,
+				});
 			} else {
 				/* the current in-progress step: its colour, dimmer, running to today */
 				const sx = stageX[inProgIdx] != null ? stageX[inProgIdx] : prevX;
-				if (endX > sx) segs.push({ a: sx, b: endX, color: hexOf(inProgIdx), days: null });
+				const end = todayX != null ? Math.max(todayX, sx + .18) : sx + .18;
+				if (end > sx + .1) segs.push({ a: sx, b: end, color: hexOf(inProgIdx), days: null, dim: true });
 			}
 			segs.forEach(sg => {
 				const wdt = Math.max(sg.b - sg.a, .18);
-				const box = new THREE.Mesh(new THREE.BoxGeometry(wdt, .2, .34), this.mat(sg.color, sg.color, 1.2));
+				/* a real pipe: a cylinder lying along the timeline axis */
+				const tube = new THREE.CylinderGeometry(.17, .17, wdt, 14);
+				tube.rotateZ(Math.PI / 2);
+				const box = new THREE.Mesh(tube, this.mat(sg.color, sg.color, sg.dim ? .4 : 1.2));
 				box.position.set((sg.a + sg.b) / 2 - x, .16, 0);
+				box.castShadow = true;
 				box.userData = { key: m.material_request };
 				g.add(box);
 				this.pipeMeshes.push(box);
 				this.hitMeshes.push(box);
-				/* day-count pill resting on the bar itself (not floating in front) */
+				/* day-count pill resting on the pipe itself (not floating in front) */
 				if (sg.days != null && sg.days > 0 && sg.b - sg.a > 1.1) {
 					const dl = this.makeLabel('+' + sg.days + 'd', {
 						size: .2, pill: true,
@@ -837,7 +882,7 @@ class Engine {
 						border: 'rgba(255,255,255,0)',
 						color: dark ? '#cbd5e1' : '#475569',
 					});
-					dl.position.set((sg.a + sg.b) / 2 - x, .27, 0);
+					dl.position.set((sg.a + sg.b) / 2 - x, .36, 0);
 					dl.renderOrder = 6;
 					g.add(dl);
 				}
@@ -1298,6 +1343,8 @@ const App = defineComponent({
 					<b>Step {{stepIndex(store.tooltip.entry)}} of 5</b>
 				</div>
 				<div class="row">{{techStatus(store.tooltip.entry)}} · {{store.tooltip.entry.material_request}}</div>
+				<div class="row" v-if="(store.tooltip.entry.fixed_asset_requests || []).length">🏷️ {{store.tooltip.entry.fixed_asset_requests.join(', ')}}</div>
+				<div class="row" v-if="(store.tooltip.entry.fuel_requests || []).length">⛽ {{store.tooltip.entry.fuel_requests.join(', ')}}</div>
 				<div class="row">{{store.tooltip.entry.item_count}} {{store.tooltip.entry.item_count === 1 ? 'item' : 'items'}} · {{store.tooltip.entry.project}}</div>
 			</div>
 			<div class="mr3d-loading" v-if="store.loading">
@@ -1318,6 +1365,9 @@ const App = defineComponent({
 				<span>{{techStatus(store.selected)}}</span>
 			</div>
 			<div class="kv"><span>📅 Date</span><b>{{store.selected.date}}</b></div>
+			<div class="kv" v-if="store.selected.mr_date && store.selected.mr_date !== store.selected.date"><span>🌱 Originated</span><b>{{store.selected.mr_date}}</b></div>
+			<div class="kv" v-if="store.selected.fixed_asset_requests && store.selected.fixed_asset_requests.length"><span>🏷️ FAR</span><b>{{store.selected.fixed_asset_requests.join(', ')}}</b></div>
+			<div class="kv" v-if="store.selected.fuel_requests && store.selected.fuel_requests.length"><span>⛽ Fuel Req</span><b>{{store.selected.fuel_requests.join(', ')}}</b></div>
 			<div class="kv"><span>📦 Items</span><b>{{store.selected.item_count}}</b></div>
 			<div class="kv"><span>🎒 Qty</span><b>{{fmt(store.selected.qty)}}</b></div>
 			<div class="kv"><span>✅ Received</span><b style="color:#22c55e">{{store.selected.pct_received}}%</b></div>

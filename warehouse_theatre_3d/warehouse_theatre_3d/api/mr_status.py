@@ -88,6 +88,10 @@ def _fetch_rows(filters):
             ),
             mr.company,
             mr_item.name.as_("mr_item"),
+            Coalesce(mr_item.custom_far_no, mr.custom_fixed_asset_request).as_(
+                "fixed_asset_request"
+            ),
+            Coalesce(mr_item.custom_fuel_request, mr.custom_fuel_request).as_("fuel_request"),
         )
         .where(
             (mr.material_request_type == "Purchase")
@@ -179,20 +183,38 @@ def _dstr(d):
     return d.strftime("%Y-%m-%d") if d else None
 
 
-def _fetch_mr_dates(mr_nos):
-    """The requisition (MR) is itself a Material Request of type Material Requisition,
-    linked from the Purchase MR via custom_mr_no. Return {number: transaction_date}."""
-    names = [n for n in set(mr_nos) if n]
-    if not names:
-        return {}
-    mr = frappe.qb.DocType("Material Request")
-    rows = (
-        frappe.qb.from_(mr)
-        .select(mr.name, mr.transaction_date)
-        .where(mr.name.isin(names))
-        .run(as_dict=True)
-    )
-    return {r["name"]: _dstr(r["transaction_date"]) for r in rows}
+def _fetch_origin_dates(entries):
+    """Best-effort transaction dates for every origin document referenced by the
+    Purchase Material Requests, so the journey can start from the true origin
+    (Material Requisition / Fuel Request / Fixed Asset Request) instead of the
+    Purchase Request itself. Fixed Asset Request is not a registered DocType on
+    some sites, so we read its table directly and swallow any errors."""
+    out = {}
+    mr_names = {m.get("material_requisition") for m in entries}
+    mr_names |= {n for m in entries for n in m.get("material_requisitions", [])}
+    fuel_names = {n for m in entries for n in m.get("fuel_requests", [])}
+    far_names = {n for m in entries for n in m.get("fixed_asset_requests", [])}
+
+    def _grab(table, col, names):
+        names = [n for n in names if n]
+        if not names:
+            return
+        try:
+            rows = frappe.db.sql(
+                "select name, %s from `%s` where name in %%s" % (col, table),
+                [names],
+                as_dict=True,
+            )
+        except Exception:
+            return
+        for r in rows:
+            if r.get(col):
+                out[r["name"]] = _dstr(r[col])
+
+    _grab("tabMaterial Request", "transaction_date", mr_names)
+    _grab("tabFuel Request", "date", fuel_names)
+    _grab("tabFixed Asset Request", "transaction_date", far_names)
+    return out
 
 
 def _nest(rows, filters):
@@ -236,6 +258,9 @@ def _nest(rows, filters):
                 "grv_date": grv_dates[0] if grv_dates else None,
                 "purchase_orders": sorted(po_map.get(row["mr_item"], {}).keys()),
                 "purchase_receipts": sorted(pr_map.get(row["mr_item"], {}).keys()),
+                "material_requisition": row.get("material_requisition"),
+                "fixed_asset_request": row.get("fixed_asset_request"),
+                "fuel_request": row.get("fuel_request"),
             }
         )
 
@@ -266,11 +291,31 @@ def _nest(rows, filters):
         m["grv_date"] = min(grv_dates) if grv_dates else None
         m["purchase_orders"] = sorted(set(all_po))
         m["purchase_receipts"] = sorted(set(all_grv))
+        m["fixed_asset_requests"] = sorted(
+            {it.get("fixed_asset_request") for it in items if it.get("fixed_asset_request")}
+        )
+        m["fuel_requests"] = sorted(
+            {it.get("fuel_request") for it in items if it.get("fuel_request")}
+        )
+        m["material_requisitions"] = sorted(
+            {it.get("material_requisition") for it in items if it.get("material_requisition")}
+        )
         mrs.append(m)
 
-    mr_dates = _fetch_mr_dates([m.get("material_requisition") for m in mrs])
+    origin_dates = _fetch_origin_dates(mrs)
     for m in mrs:
-        m["mr_date"] = mr_dates.get(m.get("material_requisition")) or m.get("date")
+        req = m.get("material_requisition")
+        candidates = []
+        # A real origin number (FAR / Fuel / MR). If the primary requisition
+        # collapsed to the Purchase Request's own name there is no real origin
+        # there, so we fall through to the FAR / Fuel / source-MR numbers.
+        if req and req != m.get("material_request"):
+            candidates.append(req)
+        candidates += list(m.get("material_requisitions") or [])
+        candidates += list(m.get("fixed_asset_requests") or [])
+        candidates += list(m.get("fuel_requests") or [])
+        dates = [origin_dates[n] for n in candidates if origin_dates.get(n)]
+        m["mr_date"] = min(dates) if dates else m.get("date")
 
     mrs.sort(key=lambda m: m["date"] or "9999-12-31")
     stats = {
