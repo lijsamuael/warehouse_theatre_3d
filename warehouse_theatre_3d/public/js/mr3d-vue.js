@@ -638,7 +638,8 @@ class Engine {
 		const dayCenter = i => X0 + (i + .5) * DAY_W;
 		const xFor = n => X0 + (n - fromN + .5) * DAY_W;
 
-		const todayN = dayNum((() => { const x = new Date(); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; })());
+		const todayISO = (() => { const x = new Date(); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; })();
+		const todayN = dayNum(todayISO);
 		const axisX1 = X0 + totalDays * DAY_W;
 		const xc = (n) => clamp(xFor(n), X0 + .3, axisX1 - .3);
 
@@ -825,9 +826,10 @@ class Engine {
 				g.add(tick);
 			}
 
-			/* mini timeline bar (group-relative) — one coloured span per journey stage.
-			   Each reached stage keeps its own colour over the days elapsed for that step,
-			   so the pipe after the card is a proper multi-coloured trail with day counts. */
+			/* mini timeline pipe (group-relative) — every reached stage keeps its own
+			   colour and a guaranteed-visible width, so a completed MR shows the full
+			   MR→PR→PO→GRV→done rainbow along the pipe with the elapsed-day counts
+			   (0d = same day). The pipe starts from the true origin, not the PR. */
 			const stageD = [
 				m.mr_date || m.date,
 				m.date,
@@ -836,31 +838,33 @@ class Engine {
 				m.fully_received ? (m.grv_date || m.date) : null,
 			];
 			const stageDone = [true, true, !!m.has_po, !!m.has_grv, !!m.fully_received];
-			const stageX = stageD.map(d => (d ? xc(dayNum(d)) : null));
 			const todayX = (todayN >= fromN && todayN <= toN) ? xc(todayN) : null;
 			const inProgIdx = stageDone.indexOf(false);
+			const MIN_W = 1.9; /* minimum pipe width per reached stage (in timeline units) */
+			const maxX = axisX1 - .3; /* keep the pipe inside the calendar area */
 			const segs = [];
-			let prevX = stageX[0], prevDate = stageD[0];
-			/* completed legs: each reached stage's span carries that stage's colour
-			   (MR leg is blue, PR leg purple, PO leg orange, GRV leg teal, done leg green) */
-			for (let s = 1; s < 5; s++) {
-				if (!stageDone[s] || stageX[s] == null) continue;
-				const to = Math.max(stageX[s], prevX + .18);
-				segs.push({ a: prevX, b: to, color: hexOf(s - 1), days: daysBetween(prevDate, stageD[s]) });
-				prevX = Math.max(prevX, to); prevDate = stageD[s];
+			let prevX = null, prevDate = null;
+			for (let s = 0; s < 5; s++) {
+				if (!stageDone[s] || stageD[s] == null) continue;
+				const rawX = xc(dayNum(stageD[s]));
+				const sx = prevX == null ? rawX : Math.min(Math.max(rawX, prevX + MIN_W), maxX);
+				if (prevX == null) { prevX = sx; prevDate = stageD[s]; continue; }
+				segs.push({ a: prevX, b: sx, color: hexOf(s - 1), days: daysBetween(prevDate, stageD[s]) });
+				prevX = sx; prevDate = stageD[s];
 			}
-			if (inProgIdx === -1) {
-				/* all five steps done: green DONE span running to today */
-				const end = todayX != null ? Math.max(todayX, prevX + .18) : prevX + .18;
+			/* trailing span: the current (in-progress) stage, dimmer, or the green done
+			   glow — always shown, running to today (a sliver when today is off-screen) */
+			if (prevX != null) {
+				const end = Math.min(
+					todayX != null ? Math.max(todayX, prevX + MIN_W) : prevX + MIN_W,
+					maxX
+				);
 				if (end > prevX + .1) segs.push({
-					a: prevX, b: end, color: hexOf(4),
-					days: todayX != null ? daysBetween(stageD[3] || stageD[0], todayN) : null,
+					a: prevX, b: end,
+					color: hexOf(inProgIdx === -1 ? 4 : inProgIdx),
+					days: daysBetween(prevDate, todayISO),
+					dim: inProgIdx !== -1,
 				});
-			} else {
-				/* the current in-progress step: its colour, dimmer, running to today */
-				const sx = stageX[inProgIdx] != null ? stageX[inProgIdx] : prevX;
-				const end = todayX != null ? Math.max(todayX, sx + .18) : sx + .18;
-				if (end > sx + .1) segs.push({ a: sx, b: end, color: hexOf(inProgIdx), days: null, dim: true });
 			}
 			segs.forEach(sg => {
 				const wdt = Math.max(sg.b - sg.a, .18);
@@ -875,8 +879,8 @@ class Engine {
 				this.pipeMeshes.push(box);
 				this.hitMeshes.push(box);
 				/* day-count pill resting on the pipe itself (not floating in front) */
-				if (sg.days != null && sg.days > 0 && sg.b - sg.a > 1.1) {
-					const dl = this.makeLabel('+' + sg.days + 'd', {
+				if (sg.days != null && sg.b - sg.a > 1.1) {
+					const dl = this.makeLabel(sg.days > 0 ? '+' + sg.days + 'd' : '0d', {
 						size: .2, pill: true,
 						bg: dark ? 'rgba(15,18,26,.7)' : 'rgba(255,255,255,.85)',
 						border: 'rgba(255,255,255,0)',
