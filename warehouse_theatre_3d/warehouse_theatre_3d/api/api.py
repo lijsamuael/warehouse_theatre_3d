@@ -43,6 +43,23 @@ def get_companies():
 
 
 @frappe.whitelist()
+def get_projects(company=None):
+	"""Distinct custom_project values found on submitted Purchase Material Requests
+	(the ones the MR journey board actually shows), optionally scoped to a company."""
+	q = frappe.qb.DocType("Material Request")
+	query = (
+		frappe.qb.from_(q)
+		.select(q.custom_project)
+		.distinct()
+		.where((q.material_request_type == "Purchase") & (q.docstatus == 1))
+	)
+	if company:
+		query = query.where(q.company == company)
+	rows = query.run(as_dict=True)
+	return sorted({r.custom_project for r in rows if r.custom_project})
+
+
+@frappe.whitelist()
 def get_warehouse_groups(company=None):
 	"""Companies as floors - the Company is the top-level floor.
 

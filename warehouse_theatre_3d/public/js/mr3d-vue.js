@@ -92,6 +92,11 @@ function friendlyRange(from, to) {
 	const b = f.getUTCMonth() === t.getUTCMonth() ? `${t.getUTCDate()}` : `${MONTHS[t.getUTCMonth()]} ${t.getUTCDate()}`;
 	return `${a} – ${b}`;
 }
+function shortDate(s) {
+	if (!s) return '';
+	const d = dayDate(dayNum(s));
+	return `${String(d.getUTCDate()).padStart(2, '0')} ${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`;
+}
 function easeOutBack(t) {
 	const c1 = 1.70158, c3 = c1 + 1;
 	return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
@@ -131,8 +136,13 @@ function roundRect(ctx, x, y, w, h, r) {
 /* ─────────────────────────────────────────────────────────────
    STORE
 ───────────────────────────────────────────────────────────── */
+function readTheme() {
+	/* dark is the default; persist the user's choice under mr3d-theme */
+	try { return localStorage.getItem('mr3d-theme') !== 'light'; } catch (e) { return true; }
+}
+
 const store = reactive({
-	isDark: false,
+	isDark: readTheme(),
 	grownUps: false,
 	party: false,
 	mrs: [],
@@ -145,6 +155,12 @@ const store = reactive({
 	request_type: 'Material Requisition',
 	company: '',
 	companies: [],
+	projects: [],
+	project: '',
+	material_requisition: '',
+	material_request: '',
+	item_code: '',
+	item_name: '',
 	selected: null,
 	tooltip: { x: 0, y: 0, visible: false, entry: null },
 	search: '',
@@ -158,7 +174,14 @@ const CSS = `
 #mr3d-app.light{--b:#f0f2f5;--b2:#fff;--b3:#f7f9fc;--bd:#e2e8f0;--t:#1a202c;--t2:#4a5568;--t3:#a0aec0;--card:#fff;--cb:#e2e8f0;--acc:#2563eb;--acc2:#3b82f6}
 #mr3d-app{width:100%;height:100%;display:flex;flex-direction:column;background:var(--b);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:12.5px;color:var(--t);position:relative;overflow:hidden;transition:background .3s}
 #mr3d-cw{flex:1;position:relative;min-height:0}
-#mr3d-c{display:block;width:100%;height:100%}
+#mr3d-c{display:block;width:100%;height:100%;touch-action:manipulation}
+.mr3d-filters{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 12px;border-bottom:1px solid var(--bd);background:var(--b3);z-index:18}
+.mr3d-filters label{display:flex;align-items:center;gap:4px;color:var(--t2);font-weight:600;font-size:11px;white-space:nowrap}
+.mr3d-filters input,.mr3d-filters select{height:26px;border:1px solid var(--bd);background:var(--b2);color:var(--t);border-radius:6px;padding:0 8px;font-size:12px;outline:none;min-width:0}
+.mr3d-filters input:focus,.mr3d-filters select:focus{border-color:var(--acc2)}
+.mr3d-filters input[type=date]{width:128px}
+.mr3d-filters .mr3d-btn{height:26px}
+.mr3d-filters .mr3d-btn-primary{height:26px;padding:0 12px}
 .mr3d-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--bd);background:var(--b2);z-index:20}
 .mr3d-title{font-weight:800;font-size:16px;color:var(--acc2);letter-spacing:-.2px;margin-right:4px;white-space:nowrap}
 .mr3d-nav{display:flex;align-items:center;gap:4px}
@@ -173,9 +196,6 @@ const CSS = `
 .mr3d-btn-party{background:linear-gradient(135deg,#f59e0b,#ef4444);border:none;color:#fff}
 .mr3d-btn-party.on{box-shadow:0 0 0 3px rgba(239,68,68,.35);animation:mr3dpulse .7s ease-in-out infinite}
 @keyframes mr3dpulse{50%{transform:scale(1.07)}}
-.mr3d-grown{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px;border-top:1px dashed var(--bd);background:var(--b3)}
-.mr3d-grown input,.mr3d-grown select{height:26px;border:1px solid var(--bd);background:var(--b2);color:var(--t);border-radius:6px;padding:0 8px;font-size:12px;outline:none}
-.mr3d-grown input:focus,.mr3d-grown select:focus{border-color:var(--acc2)}
 .mr3d-stats{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .mr3d-chip{padding:2px 9px;border-radius:999px;border:1px solid var(--bd);background:var(--card);color:var(--t2);white-space:nowrap}
 .mr3d-chip b{color:var(--t);font-weight:600;margin-left:3px}
@@ -235,7 +255,7 @@ const CSS = `
 .mr3d-open:hover{background:var(--acc2)}
 .mr3d-legend .lg{display:flex;flex-direction:column;gap:3px}
 .mr3d-legend .lg-t{font-size:9.5px;font-weight:800;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;margin-right:5px}
-.mr3d-legend .bar{width:12px;height:5px;border-radius:2px;display:inline-block;flex:0 0 auto}
+.mr3d-legend .bar{width:12px;height:5px;border-radius:2px;display:inline-block;flex:0 0 auto;box-shadow:0 0 6px rgba(255,255,255,.35)}
 .mr3d-status{font-size:14px;font-weight:800;color:var(--t);margin:2px 0 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .mr3d-status .pill{font-size:10.5px;font-weight:700;color:#fff;border-radius:999px;padding:2px 9px;white-space:nowrap}
 .mr3d-journey{margin:8px 0;border:1px solid var(--bd);border-radius:8px;padding:6px 9px;background:var(--card)}
@@ -262,6 +282,8 @@ class Engine {
 		this.meshMap = {};
 		this.entries = [];
 		this.cardMeshes = [];
+		this.pipeMeshes = [];
+		this.hitMeshes = [];
 		this.pulse = [];
 		this.theta = .65; this.phi = .85; this.radius = 30; this.panX = 0; this.panZ = 0;
 		this.tT = .65; this.tP = .85; this.tR = 30; this.tPX = 0; this.tPZ = 0;
@@ -272,6 +294,11 @@ class Engine {
 		this._sceneX = 1; this._sceneZ = 1;
 		this.selLabel = null;
 		this.audioCtx = null;
+		this.zoomKey = null;
+		this.moved = false;
+		this._clickTimer = null;
+		this._justZoomed = 0;
+		this._tapT = 0; this._tapX = -9999; this._tapY = -9999;
 	}
 
 	init(canvas, cwEl) {
@@ -421,7 +448,7 @@ class Engine {
 		loop();
 	}
 
-	drawLabel(cvs, text, { accent = false, dark = store.isDark, pill = true, color, glyph } = {}) {
+	drawLabel(cvs, text, { accent = false, dark = store.isDark, pill = true, color, glyph, bg, border } = {}) {
 		const fontPx = 40, pad = 16, dpr = 2;
 		const ctx = cvs.getContext('2d');
 		ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -432,9 +459,9 @@ class Engine {
 		cvs.width = w * dpr; cvs.height = h * dpr;
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		if (pill) {
-			ctx.fillStyle = accent ? (dark ? 'rgba(30,38,58,.94)' : 'rgba(255,255,255,.96)') : 'rgba(0,0,0,0)';
+			ctx.fillStyle = bg || (accent ? (dark ? 'rgba(30,38,58,.94)' : 'rgba(255,255,255,.96)') : 'rgba(0,0,0,0)');
 			roundRect(ctx, 0, 0, w, h, h / 2); ctx.fill();
-			ctx.strokeStyle = accent ? (dark ? 'rgba(96,165,250,.55)' : 'rgba(37,99,235,.4)') : 'rgba(0,0,0,0)';
+			ctx.strokeStyle = border || (accent ? (dark ? 'rgba(96,165,250,.55)' : 'rgba(37,99,235,.4)') : 'rgba(0,0,0,0)');
 			ctx.lineWidth = 3; roundRect(ctx, 0, 0, w, h, h / 2); ctx.stroke();
 		}
 		ctx.fillStyle = color || (accent ? (dark ? '#fff' : '#111827') : (dark ? '#cbd5e1' : '#374151'));
@@ -456,7 +483,7 @@ class Engine {
 		const dpr = 2, sc = (opts.size || 1) / 40;
 		const tex = new THREE.CanvasTexture(cvs);
 		tex.anisotropy = 4;
-		const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+		const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
 		sp.scale.set((cvs.width / dpr) * sc, (cvs.height / dpr) * sc, 1);
 		sp.userData = { canvas: cvs, size: opts.size || 1 };
 		return sp;
@@ -491,17 +518,15 @@ class Engine {
 		else if (mood === 'po') ctx.arc(w / 2, 62, 8, 0, Math.PI);
 		else ctx.arc(w / 2, 66, 5, 0, Math.PI);
 		ctx.stroke();
-		ctx.fillStyle = 'rgba(244,114,182,.45)';
-		circle(w / 2 - 36, 50, 6); circle(w / 2 + 36, 50, 6);
 		ctx.fillStyle = 'rgba(0,0,0,.5)';
-		roundRect(ctx, 10, 68, w - 20, 23, 6); ctx.fill();
-		ctx.fillStyle = '#fff';
-		ctx.font = 'bold 10px "SF Mono", Menlo, Consolas, monospace';
+		roundRect(ctx, 6, 64, w - 12, 28, 6); ctx.fill();
 		ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-		ctx.fillText(entry.material_requisition || '', w / 2, 76);
-		ctx.font = 'bold 8px "SF Mono", Menlo, Consolas, monospace';
-		ctx.fillStyle = 'rgba(255,255,255,.6)';
-		ctx.fillText(entry.mr_date || entry.date || '', w / 2, 87);
+		ctx.fillStyle = '#fff';
+		ctx.font = 'bold 13px Inter, -apple-system, Segoe UI, Roboto, sans-serif';
+		ctx.fillText(shortDate(entry.mr_date || entry.date), w / 2, 73);
+		ctx.font = 'bold 9px "SF Mono", Menlo, Consolas, monospace';
+		ctx.fillStyle = 'rgba(255,255,255,.75)';
+		ctx.fillText(entry.material_requisition || '', w / 2, 87);
 		const tex = new THREE.CanvasTexture(cvs);
 		return new THREE.Mesh(
 			new THREE.PlaneGeometry(.58, .44),
@@ -585,7 +610,7 @@ class Engine {
 	buildScene(mrs) {
 		const THREE = window.THREE;
 		while (this.rootGrp.children.length) this.rootGrp.remove(this.rootGrp.children[0]);
-		this.meshMap = {}; this.entries = []; this.cardMeshes = []; this.pulse = [];
+		this.meshMap = {}; this.entries = []; this.cardMeshes = []; this.pipeMeshes = []; this.hitMeshes = []; this.pulse = [];
 		this.pops = []; this.confetti = []; this.bouncy.clear();
 		store.selected = null; store.tooltip.visible = false;
 		this.hideSel();
@@ -614,7 +639,7 @@ class Engine {
 		const axisX1 = X0 + totalDays * DAY_W;
 		const xc = (n) => clamp(xFor(n), X0 + .3, axisX1 - .3);
 
-		const rows = mrs.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+		const rows = mrs.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).reverse();
 		const nRows = rows.length;
 		const zTop = (nRows - 1) / 2 * ROW_H;
 		const rowZ = r => zTop - r * ROW_H;
@@ -635,8 +660,8 @@ class Engine {
 		}
 
 		/* weekend shading + day labels + month labels */
-		const dayLabelEvery = totalDays <= 45 ? 1 : 7;
-		const zDayLabel = zBottom - 1.9, zMonthLabel = zTop + 1.9;
+		const dayLabelEvery = totalDays <= 90 ? 1 : 7;
+		const zDayLabel = zTop + 1.0, zMonthLabel = zTop + 2.2;
 		let lastMonth = -1;
 		for (let i = 0; i < totalDays; i++) {
 			const d = dayDate(fromN + i);
@@ -653,13 +678,20 @@ class Engine {
 				const mline = new THREE.Mesh(new THREE.BoxGeometry(.08, .9, (nRows * ROW_H) + 8), this.mat(dark ? 0x3b82f6 : 0x2563eb, dark ? 0x3b82f6 : 0x2563eb, .25));
 				mline.position.set(x, .45, 0);
 				this.rootGrp.add(mline);
-				const mlab = this.makeLabel(`${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`, { size: .6, accent: true });
-				mlab.position.set(x, .2, zMonthLabel);
+				const mlab = this.makeLabel(`${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`, { size: .9, accent: true, color: dark ? '#93c5fd' : '#2563eb' });
+				mlab.position.set(x, 1.15, zMonthLabel);
+				mlab.renderOrder = 10;
 				this.rootGrp.add(mlab);
 			}
 			if (i % dayLabelEvery === 0) {
-				const lbl = this.makeLabel(String(d.getUTCDate()), { size: .34, pill: false, color: dark ? '#94a3b8' : '#64748b' });
-				lbl.position.set(x, .1, zDayLabel);
+				const lbl = this.makeLabel(String(d.getUTCDate()), {
+					size: .52, pill: true,
+					bg: dark ? 'rgba(15,18,26,.72)' : 'rgba(255,255,255,.85)',
+					border: dark ? 'rgba(96,165,250,.25)' : 'rgba(37,99,235,.25)',
+					color: dark ? '#e2e8f0' : '#334155',
+				});
+				lbl.position.set(x, .42, zDayLabel);
+				lbl.renderOrder = 10;
 				this.rootGrp.add(lbl);
 			}
 		}
@@ -670,8 +702,9 @@ class Engine {
 			const tm = new THREE.Mesh(new THREE.BoxGeometry(.06, 1.4, (nRows * ROW_H) + 8), this.mat(0xf59e0b, 0xf59e0b, .5));
 			tm.position.set(tx, .7, 0);
 			this.rootGrp.add(tm);
-			const tl = this.makeLabel('Today', { size: .34, accent: true });
-			tl.position.set(tx, .2, zMonthLabel + 1);
+			const tl = this.makeLabel('Today', { size: .5, accent: true });
+			tl.position.set(tx, 1.15, zMonthLabel + 1.6);
+			tl.renderOrder = 10;
 			this.rootGrp.add(tl);
 		}
 
@@ -705,6 +738,7 @@ class Engine {
 			card.userData = { key: m.material_request, entry: m, x, z, grp: g };
 			g.add(card);
 			this.cardMeshes.push(card);
+			this.hitMeshes.push(card);
 			this.meshMap[m.material_request] = { entry: m, rx: x, rz: z, grp: g, y: cardY };
 			this.entries.push({ key: m.material_request, entry: m, rx: x, rz: z, y: cardY, grp: g });
 
@@ -712,6 +746,20 @@ class Engine {
 			const face = this.makeFace(m);
 			face.position.set(0, cardY, .39);
 			g.add(face);
+
+			/* MR number floating in front of the card, on its left side (clear of the timeline bar) */
+			const mrTxt = (m.material_requisition || m.material_request || '').trim();
+			if (mrTxt) {
+				const mrLbl = this.makeLabel(mrTxt.length > 14 ? mrTxt.slice(0, 13) + '…' : mrTxt, {
+					size: .3, pill: true,
+					bg: dark ? 'rgba(15,18,26,.85)' : 'rgba(255,255,255,.94)',
+					border: dark ? 'rgba(96,165,250,.45)' : 'rgba(37,99,235,.4)',
+					color: dark ? '#fff' : '#1f2937',
+				});
+				mrLbl.position.set(-1.7, cardY + .35, .5);
+				mrLbl.renderOrder = 7;
+				g.add(mrLbl);
+			}
 
 			/* stage candy coins */
 			const COIN = .44, SPACE = .5;
@@ -739,34 +787,61 @@ class Engine {
 				g.add(tick);
 			}
 
-			/* mini timeline bar (group-relative) */
-			const startX = x;
-			const poX = m.po_date ? xc(dayNum(m.po_date)) : startX;
-			const grvX = m.grv_date ? xc(dayNum(m.grv_date)) : startX;
-			const endD = m.grv_date || m.po_date || m.date;
-			let endX = Math.max(xc(dayNum(endD)), startX + .05);
-			if (!complete) endX = Math.max(endX, todayN >= fromN && todayN <= toN ? xc(todayN) : endX);
-			const seg = (a, b, col, ei) => {
-				const wdt = Math.max(b - a, .001);
-				const box = new THREE.Mesh(new THREE.BoxGeometry(wdt, .12, .3), this.mat(col, col, ei));
-				box.position.set((a + b) / 2 - x, .16, 0);
-				g.add(box);
-			};
-			if (!m.has_po && m.has_grv) {
-				seg(startX, endX, complete ? COLORS.received : COLORS.arrived, .4);
-			} else if (!m.has_po) {
-				seg(startX, endX, COLORS.waiting, .18);
-			} else {
-				const p = Math.max(poX, startX);
-				const gg = Math.max(grvX, p);
-				seg(startX, p, COLORS.waiting, .18);
-				if (m.has_grv) {
-					seg(p, gg, COLORS.po, .4);
-					if (endX > gg) seg(gg, endX, complete ? COLORS.received : COLORS.arrived, .5);
-				} else {
-					seg(p, endX, COLORS.po, .4);
-				}
+			/* mini timeline bar (group-relative) — one coloured span per journey stage.
+			   Each reached stage gets its own colour, spanning the days elapsed for that step. */
+			const stageD = [
+				m.mr_date || m.date,
+				m.date,
+				m.has_po ? m.po_date : null,
+				m.has_grv ? m.grv_date : null,
+				m.fully_received ? (m.grv_date || m.date) : null,
+			];
+			const stageDone = [true, true, !!m.has_po, !!m.has_grv, !!m.fully_received];
+			const stageX = stageD.map(d => (d ? xc(dayNum(d)) : null));
+			const firstX = stageX[0];
+			const todayX = (todayN >= fromN && todayN <= toN) ? xc(todayN) : null;
+			let endX = firstX;
+			stageX.forEach(v => { if (v != null && v > endX) endX = v; });
+			if (todayX != null && todayX > endX) endX = todayX;
+			endX = Math.max(endX, firstX + .18);
+			const inProgIdx = stageDone.indexOf(false);
+			const segs = [];
+			let prevX = firstX, prevDate = stageD[0];
+			for (let s = 0; s < 5; s++) {
+				if (!stageDone[s] || stageX[s] == null) continue;
+				const to = Math.max(stageX[s], prevX + .18);
+				segs.push({ a: prevX, b: to, color: hexOf(s), days: s > 0 ? daysBetween(prevDate, stageD[s]) : 0 });
+				prevX = Math.max(prevX, to); prevDate = stageD[s];
 			}
+			if (inProgIdx === -1) {
+				/* all five steps done: green DONE span running to today */
+				if (endX > prevX) segs.push({ a: prevX, b: endX, color: hexOf(4), days: null });
+			} else {
+				/* the current in-progress step: its colour, dimmer, running to today */
+				const sx = stageX[inProgIdx] != null ? stageX[inProgIdx] : prevX;
+				if (endX > sx) segs.push({ a: sx, b: endX, color: hexOf(inProgIdx), days: null });
+			}
+			segs.forEach(sg => {
+				const wdt = Math.max(sg.b - sg.a, .18);
+				const box = new THREE.Mesh(new THREE.BoxGeometry(wdt, .2, .34), this.mat(sg.color, sg.color, 1.2));
+				box.position.set((sg.a + sg.b) / 2 - x, .16, 0);
+				box.userData = { key: m.material_request };
+				g.add(box);
+				this.pipeMeshes.push(box);
+				this.hitMeshes.push(box);
+				/* day-count pill resting on the bar itself (not floating in front) */
+				if (sg.days != null && sg.days > 0 && sg.b - sg.a > 1.1) {
+					const dl = this.makeLabel('+' + sg.days + 'd', {
+						size: .2, pill: true,
+						bg: dark ? 'rgba(15,18,26,.7)' : 'rgba(255,255,255,.85)',
+						border: 'rgba(255,255,255,0)',
+						color: dark ? '#cbd5e1' : '#475569',
+					});
+					dl.position.set((sg.a + sg.b) / 2 - x, .27, 0);
+					dl.renderOrder = 6;
+					g.add(dl);
+				}
+			});
 
 			/* bounce in from a tiny seed */
 			g.scale.set(.01, .01, .01);
@@ -815,6 +890,18 @@ class Engine {
 		this.tR = Math.max(10, r * 1.15);
 		this.tP = .9;
 		this.tT = .65;
+		this.zoomKey = null;
+	}
+
+	/* start view: zoom onto the week containing today (fall back to the nearest edge) */
+	focusWeek(todayN, fromN, toN, xc) {
+		const focusN = (todayN >= fromN && todayN <= toN) ? todayN : clamp(todayN, fromN, toN);
+		this.tPX = xc(focusN);
+		this.tPZ = 0;
+		this.tR = Math.max(12, 3.4 * 7 * 1.05);
+		this.tP = .9;
+		this.tT = .65;
+		this.zoomKey = null;
 	}
 
 	focusBin(entry) {
@@ -822,6 +909,40 @@ class Engine {
 		if (!e) return;
 		this.tPX = e.rx; this.tPZ = e.rz;
 		this.tR = 7; this.tP = .8;
+	}
+
+	/* double-tap / double-click tight zoom on a single card */
+	focusCard(entry) {
+		const e = this.entries.find(x => x.entry === entry);
+		if (!e) return;
+		this.zoomKey = e.key;
+		this.tPX = e.rx; this.tPZ = e.rz;
+		this.tR = 2.4; this.tP = .55;
+	}
+
+	/* raycast the card under a screen point; zoom in (or back out if it's the focused one) */
+	_zoomAt(cx, cy) {
+		const THREE = window.THREE;
+		const cw = this.cwEl;
+		const r = cw.getBoundingClientRect();
+		const mouse = new THREE.Vector2(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+		const rc = new THREE.Raycaster();
+		rc.setFromCamera(mouse, this.camera);
+		const hits = rc.intersectObjects(this.hitMeshes);
+		if (hits.length) {
+			const key = hits[0].object.userData.key;
+			const d = this.meshMap[key];
+			if (this.zoomKey === key) {
+				this.fit();
+			} else {
+				store.selected = d.entry;
+				this.highlight(key);
+				this.showSel(d.entry);
+				this.focusCard(d.entry);
+				this.burst(d.rx, d.y + .5, d.rz, 44);
+				this.tone(660, .14, 'triangle', .05);
+			}
+		}
 	}
 
 	bindMouse() {
@@ -832,12 +953,14 @@ class Engine {
 
 		cw.addEventListener('mousedown', e => {
 			this.drag = true; this.rDrag = e.button === 2;
+			this.moved = false;
 			this.lx = e.clientX; this.ly = e.clientY; e.preventDefault();
 		});
 		cw.addEventListener('contextmenu', e => e.preventDefault());
 		window.addEventListener('mouseup', () => { this.drag = false; });
 		window.addEventListener('mousemove', e => {
 			if (!this.drag) return;
+			this.moved = true;
 			const dx = e.clientX - this.lx, dy = e.clientY - this.ly;
 			this.lx = e.clientX; this.ly = e.clientY;
 			if (this.rDrag) {
@@ -850,18 +973,33 @@ class Engine {
 		});
 		cw.addEventListener('wheel', e => {
 			e.preventDefault();
-			this.tR = clamp(this.tR + e.deltaY * .04, 5, 500);
+			this.tR = clamp(this.tR + e.deltaY * .04, 2, 500);
 		}, { passive: false });
 		cw.addEventListener('touchstart', e => {
+			this.moved = false;
 			if (e.touches.length === 2) {
+				this._tapT = 0;
 				ltD = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-			} else { ltX = e.touches[0].clientX; ltY = e.touches[0].clientY; }
+			} else {
+				ltX = e.touches[0].clientX; ltY = e.touches[0].clientY;
+				const now = Date.now();
+				if (this._tapT && now - this._tapT < 320 && Math.hypot(ltX - this._tapX, ltY - this._tapY) < 40) {
+					this._tapT = 0;
+					this._justZoomed = now;
+					if (this._clickTimer) { clearTimeout(this._clickTimer); this._clickTimer = null; }
+					this._zoomAt(ltX, ltY);
+				} else {
+					this._tapT = now; this._tapX = ltX; this._tapY = ltY;
+				}
+			}
 		}, { passive: true });
 		cw.addEventListener('touchmove', e => {
 			e.preventDefault();
+			this.moved = true;
+			this._tapT = 0;
 			if (e.touches.length === 2) {
 				const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-				this.tR = clamp(this.tR - (d - ltD) * .08, 5, 500); ltD = d;
+				this.tR = clamp(this.tR - (d - ltD) * .08, 2, 500); ltD = d;
 			} else {
 				const dx = e.touches[0].clientX - ltX, dy = e.touches[0].clientY - ltY;
 				this.tT -= dx * .01; this.tP = clamp(this.tP + dy * .01, .12, 1.45);
@@ -874,7 +1012,7 @@ class Engine {
 			const r = cw.getBoundingClientRect();
 			mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
 			rc.setFromCamera(mouse, this.camera);
-			const hits = rc.intersectObjects(this.cardMeshes);
+			const hits = rc.intersectObjects(this.hitMeshes);
 			if (hits.length) {
 				const key = hits[0].object.userData.key;
 				if (this.hovKey !== key) { this.hovKey = key; this.highlight(key); }
@@ -888,25 +1026,40 @@ class Engine {
 			}
 		});
 		cw.addEventListener('click', e => {
+			if (this.moved) return;
+			if (this._justZoomed && Date.now() - this._justZoomed < 300) return; /* synthesized click after a double-tap */
+			if (this._clickTimer) return; /* second click of a double-click */
 			const r = cw.getBoundingClientRect();
 			mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
 			rc.setFromCamera(mouse, this.camera);
-			const hits = rc.intersectObjects(this.cardMeshes);
+			const hits = rc.intersectObjects(this.hitMeshes);
 			if (hits.length) {
-				const d = this.meshMap[hits[0].object.userData.key];
-				store.selected = d.entry;
-				this.highlight(hits[0].object.userData.key);
-				this.showSel(d.entry);
-				this.focusBin(d.entry);
-				this.burst(d.rx, d.y + .5, d.rz, 44);
-				this.tone(440, .1, 'triangle', .06);
-				this.tone(660, .14, 'triangle', .05);
-				if (d.grp) this.bouncy.set(d.entry.material_request, { t: 0, grp: d.grp });
+				const key = hits[0].object.userData.key;
+				const d = this.meshMap[key];
+				if (!d) return;
+				this._clickTimer = setTimeout(() => {
+					this._clickTimer = null;
+					store.selected = d.entry;
+					this.highlight(key);
+					this.showSel(d.entry);
+					this.focusBin(d.entry);
+					this.burst(d.rx, d.y + .5, d.rz, 44);
+					this.tone(440, .1, 'triangle', .06);
+					this.tone(660, .14, 'triangle', .05);
+					if (d.grp) this.bouncy.set(d.entry.material_request, { t: 0, grp: d.grp });
+				}, 240);
 			} else {
+				if (this._clickTimer) { clearTimeout(this._clickTimer); this._clickTimer = null; }
 				store.selected = null;
 				this.highlight(null);
 				this.hideSel();
 			}
+		});
+		cw.addEventListener('dblclick', e => {
+			if (this.moved) return;
+			if (this._clickTimer) { clearTimeout(this._clickTimer); this._clickTimer = null; }
+			this._zoomAt(e.clientX, e.clientY);
+			e.preventDefault();
 		});
 	}
 }
@@ -927,6 +1080,7 @@ function defaultDates() {
 const actions = {
 	async init() {
 		try { store.companies = await call('api.get_companies'); } catch (e) { store.companies = []; }
+		try { store.projects = await call('api.get_projects'); } catch (e) { store.projects = []; }
 		const d = defaultDates();
 		store.from_date = store.from_date || d.from;
 		store.to_date = store.to_date || d.to;
@@ -943,6 +1097,10 @@ const actions = {
 					to_date: store.to_date,
 					request_type: store.request_type,
 					company: store.company || null,
+					project: store.project || null,
+					material_requisition: store.material_requisition || null,
+					material_request: store.material_request || null,
+					item_code: store.item_code || null,
 				}),
 			});
 			store.mrs = res.mrs || [];
@@ -958,6 +1116,7 @@ const actions = {
 	},
 	toggleTheme() {
 		store.isDark = !store.isDark;
+		try { localStorage.setItem('mr3d-theme', store.isDark ? 'dark' : 'light'); } catch (e) { /* ignore */ }
 		engine.buildScene(store.mrs);
 	},
 	fit() { engine.fit(); },
@@ -1036,9 +1195,29 @@ const App = defineComponent({
 				store.tooltip.visible = false;
 				engine.highlight(null);
 				engine.hideSel();
+				engine.fit();
 			}
 		}
-		return { store, engine, stats, rangeText, searchResults, actions, fmt, STAGES, journey, techStatus, stepIndex, docsOf, WEEKDAYS };
+		function onReqType() {
+			store.material_requisition = '';
+			store.material_request = '';
+			actions.load();
+		}
+		function onCompany() {
+			call('api.get_projects', { company: store.company || '' })
+				.then(p => { store.projects = p || []; })
+				.catch(() => { store.projects = []; });
+			actions.load();
+		}
+		function onItemCode() {
+			if (!store.item_code) { store.item_name = ''; return; }
+			if (window.frappe && frappe.db) {
+				frappe.db.get_value('Item', store.item_code, 'item_name', r => {
+					if (r && r.item_name) store.item_name = r.item_name;
+				});
+			}
+		}
+		return { store, engine, stats, rangeText, searchResults, actions, fmt, STAGES, journey, techStatus, stepIndex, docsOf, WEEKDAYS, onReqType, onCompany, onItemCode };
 	},
 	template: `
 	<div id="mr3d-app" :class="store.isDark?'dark':'light'">
@@ -1059,19 +1238,27 @@ const App = defineComponent({
 			<button class="mr3d-btn-big" :class="store.grownUps?'on':''" @click="actions.toggleGrownUps()">{{store.grownUps?'🙈 Simple':'🔬 Details'}}</button>
 		</div>
 
-		<div class="mr3d-grown" v-if="store.grownUps">
-			<input type="date" v-model="store.from_date" title="From">
-			<input type="date" v-model="store.to_date" title="To">
-			<select v-model="store.request_type">
+		<div class="mr3d-filters">
+			<label>Type <select v-model="store.request_type" @change="onReqType()" title="Request type">
 				<option>Material Requisition</option>
 				<option>Fuel Request</option>
 				<option>Fixed Asset Request</option>
-			</select>
-			<select v-model="store.company">
-				<option value="">All companies</option>
+			</select></label>
+			<label>Company <select v-model="store.company" @change="onCompany()" title="Company">
+				<option value="">All</option>
 				<option v-for="c in store.companies" :key="c.name" :value="c.name">{{c.name}}</option>
-			</select>
-			<button class="mr3d-btn mr3d-btn-primary" :disabled="store.loading" @click="actions.load()">{{store.loading?'Loading…':'Load'}}</button>
+			</select></label>
+			<label>From <input type="date" v-model="store.from_date" title="From date"></label>
+			<label>To <input type="date" v-model="store.to_date" title="To date"></label>
+			<label>Project <select v-model="store.project" title="Project">
+				<option value="">All</option>
+				<option v-for="p in store.projects" :key="p" :value="p">{{p}}</option>
+			</select></label>
+			<label>MR <input v-model="store.material_requisition" placeholder="MR no." style="width:110px" title="Material Requisition number"></label>
+			<label>PR <input v-model="store.material_request" placeholder="Purchase Request" style="width:130px" title="Purchase Request name"></label>
+			<label>Item <input v-model="store.item_code" placeholder="Item code" style="width:110px" @blur="onItemCode()" title="Item code"></label>
+			<input v-if="store.item_name" :value="store.item_name" readonly title="Item name" style="width:130px">
+			<button class="mr3d-btn mr3d-btn-primary" :disabled="store.loading" @click="actions.load()">{{store.loading?'Loading…':'Apply'}}</button>
 			<div class="mr3d-search">
 				<input v-model="store.search" placeholder="Search MR / item…" @keydown.esc="actions.clearSearch()">
 				<div class="mr3d-drop" v-if="searchResults.length">
@@ -1095,14 +1282,15 @@ const App = defineComponent({
 					<span><i style="background:#22c55e"></i>✓</span>
 				</div>
 				<div class="lg">
-					<span class="lg-t">Bar</span>
-					<span><span class="bar" style="background:#93c5fd"></span>Waiting</span>
-					<span><span class="bar" style="background:#f59e0b"></span>Ordered</span>
-					<span><span class="bar" style="background:#14b8a6"></span>Arrived</span>
-					<span><span class="bar" style="background:#22c55e"></span>Received</span>
+					<span class="lg-t">Pipe</span>
+					<span><span class="bar" style="background:#3b82f6"></span>MR</span>
+					<span><span class="bar" style="background:#8b5cf6"></span>PR</span>
+					<span><span class="bar" style="background:#f59e0b"></span>PO</span>
+					<span><span class="bar" style="background:#14b8a6"></span>GRV</span>
+					<span><span class="bar" style="background:#22c55e"></span>✓</span>
 				</div>
 			</div>
-			<div class="mr3d-hint">👆 Tap a card to see its paperwork</div>
+			<div class="mr3d-hint">👆 Tap a card for its paperwork · Double-tap to zoom in / out</div>
 			<div class="mr3d-tooltip" v-if="store.tooltip.visible" :style="{left:store.tooltip.x+'px', top:store.tooltip.y+'px'}">
 				<b>{{store.tooltip.entry.material_requisition}}</b>
 				<div class="row">

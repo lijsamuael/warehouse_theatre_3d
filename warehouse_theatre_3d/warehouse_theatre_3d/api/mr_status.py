@@ -102,6 +102,10 @@ def _fetch_rows(filters):
         query = query.where(mr.company == filters.get("company"))
     if filters.get("project"):
         query = query.where(mr.custom_project == filters.get("project"))
+    if filters.get("material_request"):
+        query = query.where(mr.name == filters.get("material_request"))
+    if filters.get("item_code"):
+        query = query.where(mr_item.item_code == filters.get("item_code"))
 
     if request_type == "Fuel Request":
         query = query.where(
