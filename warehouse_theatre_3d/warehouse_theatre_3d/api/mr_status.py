@@ -17,7 +17,7 @@ def _parse_filters(filters):
 
 def _requisition_field(filters):
     """Which custom field holds the requisition number for the chosen request type."""
-    request_type = filters.get("request_type") or "Material Requisition"
+    request_type = filters.get("request_type") or "All"
     mr = frappe.qb.DocType("Material Request")
     mr_item = frappe.qb.DocType("Material Request Item")
 
@@ -25,23 +25,37 @@ def _requisition_field(filters):
         return Coalesce(mr_item.custom_fuel_request, mr.custom_fuel_request)
     if request_type == "Fixed Asset Request":
         return Coalesce(mr_item.custom_far_no, mr.custom_fixed_asset_request)
-    return Coalesce(mr_item.custom_mr_number, mr.custom_mr_no)
+    if request_type == "Material Requisition":
+        return Coalesce(mr_item.custom_mr_number, mr.custom_mr_no)
+    return Coalesce(
+        mr_item.custom_mr_number,
+        mr_item.custom_far_no,
+        mr_item.custom_fuel_request,
+        mr.custom_mr_no,
+        mr.custom_fixed_asset_request,
+        mr.custom_fuel_request,
+    )
 
 
 @frappe.whitelist()
 def get_mr_status(filters=None):
-    """Journey-board data: one flat entry per Material Request, with the
-    five-stage flow MR -> PR -> PO -> GRV -> Purchase Receipt.
+    """Journey-board data: one flat entry per request along the six-column flow
+
+        Fixed Asset Request / Fuel Request / Material Request  (not yet a PR)
+        -> Purchase Request -> Purchase Order -> Purchase Receipt
 
     Structure: { mrs: [...], stats: {...} }
-    Each MR is shown as a single card on the calendar (never split by item);
+    Each request is shown as a single card on the calendar (never split by item);
     its items are kept only for the click-detail panel.
     """
     filters = _parse_filters(filters)
     validate_filters(filters)
 
     rows = _fetch_rows(filters)
-    return _nest(rows, filters)
+    mrs = _nest(rows, filters)
+    mrs.extend(_standalone_origins(filters))
+    mrs.sort(key=lambda m: m["date"] or "9999-12-31")
+    return {"mrs": mrs, "stats": _stats(mrs)}
 
 
 def validate_filters(filters):
@@ -58,7 +72,7 @@ def _default_dates():
 def _fetch_rows(filters):
     mr = frappe.qb.DocType("Material Request")
     mr_item = frappe.qb.DocType("Material Request Item")
-    request_type = filters.get("request_type") or "Material Requisition"
+    request_type = filters.get("request_type") or "All"
 
     from_date = filters.get("from_date") or _default_dates()[0]
     to_date = filters.get("to_date") or _default_dates()[1]
@@ -119,8 +133,9 @@ def _fetch_rows(filters):
         query = query.where(
             (mr.custom_fixed_asset_request.isnotnull()) | (mr_item.custom_far_no.isnotnull())
         )
-    else:
+    elif request_type == "Material Requisition":
         query = query.where((mr.custom_mr_no.isnotnull()) | (mr_item.custom_mr_number.isnotnull()))
+    # "All": include every origin (FAR / Fuel / MR) in one board.
 
     if filters.get("material_requisition"):
         mr_no = filters.get("material_requisition")
@@ -132,14 +147,216 @@ def _fetch_rows(filters):
             query = query.where(
                 (mr.custom_fixed_asset_request == mr_no) | (mr_item.custom_far_no == mr_no)
             )
-        else:
+        elif request_type == "Material Requisition":
             query = query.where((mr.custom_mr_no == mr_no) | (mr_item.custom_mr_number == mr_no))
+        else:
+            query = query.where(
+                (mr.custom_mr_no == mr_no)
+                | (mr_item.custom_mr_number == mr_no)
+                | (mr.custom_fuel_request == mr_no)
+                | (mr_item.custom_fuel_request == mr_no)
+                | (mr.custom_fixed_asset_request == mr_no)
+                | (mr_item.custom_far_no == mr_no)
+            )
+
+    # Department / requested-by are site custom fields on Material Request.
+    if frappe.db.has_column("Material Request", "custom_department"):
+        query = query.select(mr.custom_department.as_("department"))
+    if frappe.db.has_column("Material Request", "custom_requested_by"):
+        query = query.select(mr.custom_requested_by.as_("requested_by"))
 
     return (
         query.groupby(mr.name, mr_item.item_code)
         .orderby(mr.transaction_date, mr_item.schedule_date)
         .run(as_dict=True)
     )
+
+
+def _standalone_origins(filters):
+    """Fixed Asset Requests / Fuel Requests / Material Requests that have not yet
+    been converted into a Purchase Request. These fill the first three columns of
+    the journey board (FAR, Fuel, MR); once a Purchase Request exists the same
+    card flows through PR -> PO -> Purchase Receipt."""
+    if filters.get("material_request") or filters.get("item_code"):
+        return []
+
+    request_type = filters.get("request_type") or "All"
+    from_date = filters.get("from_date")
+    to_date = filters.get("to_date")
+    company = filters.get("company")
+    project = filters.get("project")
+    mr_no = filters.get("material_requisition")
+    entries = []
+
+    def _in_range(d):
+        d = _dstr(d)
+        if not d:
+            return False
+        if from_date and d < from_date:
+            return False
+        if to_date and d > to_date:
+            return False
+        return True
+
+    ORIGIN_STAGE = {"far": 0, "fuel": 1, "mr": 2}
+
+    def _base(name, origin, stage, date, project, company, department=None, requested_by=None):
+        return {
+            "material_requisition": name,
+            "material_request": name,
+            "date": _dstr(date),
+            "mr_date": _dstr(date),
+            "project": project or "No Project",
+            "company": company,
+            "department": department or "",
+            "requested_by": requested_by or "",
+            "origin": origin,
+            "has_pr": False,
+            "has_po": False,
+            "has_grv": False,
+            "fully_received": False,
+            "stage": stage if stage is not None else ORIGIN_STAGE[origin],
+            "item_count": 0,
+            "qty": 0,
+            "ordered_qty": 0,
+            "received_qty": 0,
+            "qty_to_order": 0,
+            "qty_to_receive": 0,
+            "pct_received": 0,
+            "po_date": None,
+            "grv_date": None,
+            "purchase_orders": [],
+            "purchase_receipts": [],
+            "fixed_asset_requests": [name] if origin == "far" else [],
+            "fuel_requests": [name] if origin == "fuel" else [],
+            "material_requisitions": [name] if origin == "mr" else [],
+            "items": [],
+        }
+
+    def _extra_cols(table, candidates):
+        """Columns that actually exist on the (possibly custom) origin doctype."""
+        return [c for c in candidates if frappe.db.has_column(table, c)]
+
+    if request_type in ("All", "Fixed Asset Request"):
+        try:
+            far_cols = ["f.name", "f.transaction_date", "f.company", "f.project"]
+            far_cols += [f"f.{c}" for c in _extra_cols("Fixed Asset Request", ["department", "requested_by"])]
+            far_rows = frappe.db.sql(
+                """select %s
+                   from `tabFixed Asset Request` f
+                   where f.docstatus = 1 and not exists (
+                       select 1 from `tabMaterial Request` m
+                       left join `tabMaterial Request Item` i on i.parent = m.name
+                       where m.material_request_type = 'Purchase' and m.docstatus = 1
+                       and (m.custom_fixed_asset_request = f.name or i.custom_far_no = f.name))"""
+                % ", ".join(far_cols),
+                as_dict=True,
+            )
+        except Exception:
+            # Fixed Asset Request is not registered on every site; skip it.
+            far_rows = []
+        for r in far_rows:
+            if not _in_range(r.get("transaction_date")):
+                continue
+            if company and r.get("company") != company:
+                continue
+            if project and r.get("project") != project:
+                continue
+            if mr_no and mr_no != r["name"]:
+                continue
+            entries.append(
+                _base(
+                    r["name"], "far", None, r.get("transaction_date"), r.get("project"), r.get("company"),
+                    r.get("department"), r.get("requested_by"),
+                )
+            )
+
+    if request_type in ("All", "Fuel Request"):
+        try:
+            fuel_cols = ["f.name", "f.date", "f.project"]
+            fuel_cols += [f"f.{c}" for c in _extra_cols("Fuel Request", ["custom_department", "requested_by"])]
+            fuel_rows = frappe.db.sql(
+                """select %s
+                   from `tabFuel Request` f
+                   where f.docstatus = 1 and not exists (
+                       select 1 from `tabMaterial Request` m
+                       left join `tabMaterial Request Item` i on i.parent = m.name
+                       where m.material_request_type = 'Purchase' and m.docstatus = 1
+                       and (m.custom_fuel_request = f.name or i.custom_fuel_request = f.name))"""
+                % ", ".join(fuel_cols),
+                as_dict=True,
+            )
+        except Exception:
+            # Fuel Request is not registered on every site; skip it.
+            fuel_rows = []
+        for r in fuel_rows:
+            if not _in_range(r.get("date")):
+                continue
+            if project and r.get("project") != project:
+                continue
+            if mr_no and mr_no != r["name"]:
+                continue
+            entries.append(
+                _base(
+                    r["name"], "fuel", None, r.get("date"), r.get("project"), None,
+                    r.get("custom_department"), r.get("requested_by"),
+                )
+            )
+
+    if request_type in ("All", "Material Requisition"):
+        mr_cols = ["m.name", "m.transaction_date", "m.custom_project", "m.company"]
+        mr_cols += [f"m.{c}" for c in _extra_cols("Material Request", ["custom_department", "custom_requested_by"])]
+        mr_rows = frappe.db.sql(
+            """select %s
+               from `tabMaterial Request` m
+               where m.material_request_type <> 'Purchase' and m.docstatus = 1
+               and m.status <> 'Stopped' and not exists (
+                   select 1 from `tabMaterial Request` p
+                   left join `tabMaterial Request Item` i on i.parent = p.name
+                   where p.material_request_type = 'Purchase' and p.docstatus = 1
+                   and (p.custom_mr_no = m.name or i.custom_mr_number = m.name))"""
+            % ", ".join(mr_cols),
+            as_dict=True,
+        )
+        for r in mr_rows:
+            if not _in_range(r.get("transaction_date")):
+                continue
+            if company and r.get("company") != company:
+                continue
+            if project and r.get("project") != project:
+                continue
+            if mr_no and mr_no != r["name"]:
+                continue
+            entries.append(
+                _base(
+                    r["name"], "mr", None, r.get("transaction_date"), r.get("custom_project"), r.get("company"),
+                    r.get("custom_department"), r.get("custom_requested_by"),
+                )
+            )
+
+    return entries
+
+
+def _stats(mrs):
+    """Counts per journey column + overall totals, used by the header chips."""
+    return {
+        "mr_count": len(mrs),
+        "item_count": sum(m["item_count"] for m in mrs),
+        "qty": sum(m["qty"] for m in mrs),
+        "received_qty": sum(m["received_qty"] for m in mrs),
+        "ordered_qty": sum(m["ordered_qty"] for m in mrs),
+        "far_count": sum(1 for m in mrs if m.get("origin") == "far"),
+        "fuel_count": sum(1 for m in mrs if m.get("origin") == "fuel"),
+        "material_count": sum(1 for m in mrs if m.get("origin") == "mr"),
+        "req_count": sum(1 for m in mrs if m["stage"] in (0, 1, 2)),
+        "pr_count": sum(1 for m in mrs if m["stage"] == 3),
+        "po_count": sum(1 for m in mrs if m["stage"] == 4),
+        "received_count": sum(1 for m in mrs if m["stage"] == 5),
+        "pending_mrs": sum(1 for m in mrs if not m["has_po"]),
+        "ordered_mrs": sum(1 for m in mrs if m["has_po"] and not m["has_grv"]),
+        "arrived_mrs": sum(1 for m in mrs if m["has_grv"] and not m["fully_received"]),
+        "done_mrs": sum(1 for m in mrs if m["fully_received"]),
+    }
 
 
 def _fetch_links(rows):
@@ -233,6 +450,8 @@ def _nest(rows, filters):
                 "required_date": _dstr(row.get("required_date")),
                 "project": row.get("project"),
                 "company": row.get("company"),
+                "department": row.get("department") or "",
+                "requested_by": row.get("requested_by") or "",
                 "items": [],
             },
         )
@@ -300,6 +519,23 @@ def _nest(rows, filters):
         m["material_requisitions"] = sorted(
             {it.get("material_requisition") for it in items if it.get("material_requisition")}
         )
+        # Where this card lives on the board:
+        #   FAR / Fuel / MR (three request columns) -> Purchase Request
+        #   -> Purchase Order -> Purchase Receipt.
+        #   Fuel requests skip the Purchase Order and go PR -> Receipt directly.
+        m["origin"] = (
+            "far"
+            if m["fixed_asset_requests"]
+            else ("fuel" if m["fuel_requests"] else "mr")
+        )
+        if m["origin"] == "fuel":
+            m["stage"] = 5 if m["has_grv"] else 3
+        elif not m["has_po"]:
+            m["stage"] = 3
+        elif not m["has_grv"]:
+            m["stage"] = 4
+        else:
+            m["stage"] = 5
         mrs.append(m)
 
     origin_dates = _fetch_origin_dates(mrs)
@@ -318,15 +554,4 @@ def _nest(rows, filters):
         m["mr_date"] = min(dates) if dates else m.get("date")
 
     mrs.sort(key=lambda m: m["date"] or "9999-12-31")
-    stats = {
-        "mr_count": len(mrs),
-        "item_count": sum(m["item_count"] for m in mrs),
-        "qty": sum(m["qty"] for m in mrs),
-        "received_qty": sum(m["received_qty"] for m in mrs),
-        "ordered_qty": sum(m["ordered_qty"] for m in mrs),
-        "pending_mrs": sum(1 for m in mrs if not m["has_po"]),
-        "ordered_mrs": sum(1 for m in mrs if m["has_po"] and not m["has_grv"]),
-        "arrived_mrs": sum(1 for m in mrs if m["has_grv"] and not m["fully_received"]),
-        "done_mrs": sum(1 for m in mrs if m["fully_received"]),
-    }
-    return {"mrs": mrs, "stats": stats}
+    return mrs
